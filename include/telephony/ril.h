@@ -1,7 +1,8 @@
 /*
- * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
- * Not a Contribution
  * Copyright (C) 2006 The Android Open Source Project
+ * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+ *
+ * Not a Contribution
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +32,7 @@
 extern "C" {
 #endif
 
-#define RIL_VERSION 9     /* Current version */
+#define RIL_VERSION 8     /* Current version */
 #ifdef LEGACY_RIL
 #define RIL_VERSION_MIN 2 /* Minimum RIL_VERSION supported */
 #else
@@ -41,12 +42,6 @@ extern "C" {
 
 #define CDMA_ALPHA_INFO_BUFFER_LENGTH 64
 #define CDMA_NUMBER_INFO_BUFFER_LENGTH 81
-
-#define MAX_RILDS 3
-#define MAX_SOCKET_NAME_LENGTH 6
-#define MAX_CLIENT_ID_LENGTH 2
-#define MAX_DEBUG_SOCKET_NAME_LENGTH 12
-#define MAX_QEMU_PIPE_NAME_LENGTH  11
 
 typedef void * RIL_Token;
 
@@ -131,7 +126,6 @@ typedef enum {
     RADIO_TECH_HSPAP = 15, // HSPA+
     RADIO_TECH_GSM = 16, // Only supports voice
     RADIO_TECH_TD_SCDMA = 17,
-    RADIO_TECH_IWLAN = 18,
     RADIO_TECH_DCHSPAP = 30
 } RIL_RadioTechnology;
 
@@ -288,10 +282,10 @@ typedef struct {
                                             */
 
     union {
-        /* Valid field if tech is RADIO_TECH_3GPP2. See RIL_REQUEST_CDMA_SEND_SMS */
+        /* Valid field if format is FORMAT_3GPP2. See RIL_REQUEST_CDMA_SEND_SMS */
         RIL_CDMA_SMS_Message* cdmaMessage;
 
-        /* Valid field if tech is RADIO_TECH_3GPP. See RIL_REQUEST_SEND_SMS */
+        /* Valid field if format is FORMAT_3GPP. See RIL_REQUEST_SEND_SMS */
         char**                gsmMessage;
     } message;
 } RIL_IMS_SMS_Message;
@@ -465,7 +459,7 @@ typedef enum {
     PDP_FAIL_DATA_REGISTRATION_FAIL = -2,
 
    /* reasons for data call drop - network/modem disconnect */
-    PDP_FAIL_SIGNAL_LOST = -3,
+    PDP_FAIL_SIGNAL_LOST = -3,            /* no retry */
     PDP_FAIL_PREF_RADIO_TECH_CHANGED = -4,/* preferred technology has changed, should retry
                                              with parameters appropriate for new technology */
     PDP_FAIL_RADIO_POWER_OFF = -5,        /* data call was disconnected because radio was resetting,
@@ -536,6 +530,12 @@ typedef enum {
     RIL_PERSOSUBSTATE_RUIM_SERVICE_PROVIDER_PUK = 23,
     RIL_PERSOSUBSTATE_RUIM_RUIM_PUK             = 24
 } RIL_PersoSubstate;
+
+typedef struct {
+    RIL_PersoSubstate depersonalizationType;
+    char             *depersonalizationCode;
+} RIL_Depersonalization;
+
 
 typedef enum {
     RIL_APPSTATE_UNKNOWN               = 0,
@@ -786,7 +786,7 @@ typedef struct {
                   * Range : 25 to 120
                   * INT_MAX: 0x7FFFFFFF denotes invalid value.
                   * Reference: 3GPP TS 25.123, section 9.1.1.1 */
-} RIL_TD_SCDMA_SignalStrength_CAF;
+} RIL_TD_SCDMA_SignalStrength;
 
 /* Deprecated, use RIL_SignalStrength_v6 */
 typedef struct {
@@ -806,16 +806,16 @@ typedef struct {
     RIL_GW_SignalStrength       GW_SignalStrength;
     RIL_CDMA_SignalStrength     CDMA_SignalStrength;
     RIL_EVDO_SignalStrength     EVDO_SignalStrength;
-    RIL_LTE_SignalStrength_v8   LTE_SignalStrength;
-} RIL_SignalStrength_v8;
+    RIL_LTE_SignalStrength      LTE_SignalStrength;
+    RIL_TD_SCDMA_SignalStrength TD_SCDMA_SignalStrength;
+} RIL_SignalStrength_v7;
 
 typedef struct {
-    RIL_GW_SignalStrength           GW_SignalStrength;
-    RIL_CDMA_SignalStrength         CDMA_SignalStrength;
-    RIL_EVDO_SignalStrength         EVDO_SignalStrength;
-    RIL_LTE_SignalStrength_v8       LTE_SignalStrength;
-    RIL_TD_SCDMA_SignalStrength_CAF TD_SCDMA_SignalStrength;
-} RIL_SignalStrength_v9_CAF;
+    RIL_GW_SignalStrength       GW_SignalStrength;
+    RIL_CDMA_SignalStrength     CDMA_SignalStrength;
+    RIL_EVDO_SignalStrength     EVDO_SignalStrength;
+    RIL_LTE_SignalStrength_v8   LTE_SignalStrength;
+} RIL_SignalStrength_v8;
 
 /** RIL_CellIdentityGsm */
 typedef struct {
@@ -1269,11 +1269,9 @@ typedef struct {
 /**
  * RIL_REQUEST_ENTER_DEPERSONALIZATION_CODE
  *
- * Requests that personlization be deactivated
+ * Requests that network personlization be deactivated
  *
- * "data" is const char **
- * ((const char **)(data))[0]] is personlization type
- * ((const char **)(data))[1]] is depersonlization code
+ * "data" is const RIL_Depersonalization*
  *
  * "response" is int *
  * ((int *)response)[0] is the number of retries remaining, or -1 if unknown
@@ -3648,6 +3646,7 @@ typedef struct {
  */
 #define RIL_REQUEST_VOICE_RADIO_TECH 108
 
+#ifndef RIL_NO_CELL_INFO_LIST
 /**
  * RIL_REQUEST_GET_CELL_INFO_LIST
  *
@@ -3681,20 +3680,7 @@ typedef struct {
  *  GENERIC_FAILURE
  */
 #define RIL_REQUEST_SET_UNSOL_CELL_INFO_LIST_RATE 110
-
-/**
- * RIL_REQUEST_SET_INITIAL_ATTACH_APN
- *
- * Set an apn to initial attach network
- * "response" is NULL
- *
- * Valid errors:
- *  SUCCESS
- *  RADIO_NOT_AVAILABLE (radio resetting)
- *  GENERIC_FAILURE
- *  SUBSCRIPTION_NOT_AVAILABLE
- */
-#define RIL_REQUEST_SET_INITIAL_ATTACH_APN 111
+#endif
 
 /**
  * RIL_REQUEST_IMS_REGISTRATION_STATE
@@ -3711,14 +3697,18 @@ typedef struct {
  * If ((int*)response)[0] is = 1, then ((int *) response)[1]
  * must follow with IMS SMS format:
  *
- * ((int *) response)[1] is of type RIL_RadioTechnologyFamily
+ * ((int *) response)[1] is of type const RIL_IMS_SMS_Format
  *
  * Valid errors:
  *  SUCCESS
  *  RADIO_NOT_AVAILABLE
  *  GENERIC_FAILURE
  */
-#define RIL_REQUEST_IMS_REGISTRATION_STATE 112
+#ifndef RIL_NO_CELL_INFO_LIST
+#define RIL_REQUEST_IMS_REGISTRATION_STATE 111
+#else
+#define RIL_REQUEST_IMS_REGISTRATION_STATE 109
+#endif
 
 /**
  * RIL_REQUEST_IMS_SEND_SMS
@@ -3741,7 +3731,11 @@ typedef struct {
  *  GENERIC_FAILURE
  *
  */
-#define RIL_REQUEST_IMS_SEND_SMS 113
+#ifndef RIL_NO_CELL_INFO_LIST
+#define RIL_REQUEST_IMS_SEND_SMS 112
+#else
+#define RIL_REQUEST_IMS_SEND_SMS 110
+#endif
 
 /**
  * RIL_REQUEST_GET_DATA_CALL_PROFILE
@@ -3764,14 +3758,17 @@ typedef struct {
  *  RIL_E_DATA_CALL_PROFILE_NOT_AVAILABLE
  *
  */
-#define RIL_REQUEST_GET_DATA_CALL_PROFILE 114
-
+#ifndef RIL_NO_CELL_INFO_LIST
+#define RIL_REQUEST_GET_DATA_CALL_PROFILE 113
+#else
+#define RIL_REQUEST_GET_DATA_CALL_PROFILE 111
+#endif
+ 
 /**
  * RIL_REQUEST_SET_UICC_SUBSCRIPTION
  *
- * Selection/de-selection of a subscription from a SIM card
+ * Selects/deselects a particular application/subscription to use on a particular SIM card
  * "data" is const  RIL_SelectUiccSub*
-
  *
  * "response" is NULL
  *
@@ -3782,7 +3779,11 @@ typedef struct {
  *  SUBSCRIPTION_NOT_SUPPORTED
  *
  */
-#define RIL_REQUEST_SET_UICC_SUBSCRIPTION  115
+#ifndef RIL_NO_CELL_INFO_LIST
+#define RIL_REQUEST_SET_UICC_SUBSCRIPTION  114
+#else
+#define RIL_REQUEST_SET_UICC_SUBSCRIPTION  118
+#endif
 
 /**
  *  RIL_REQUEST_SET_DATA_SUBSCRIPTION
@@ -3797,11 +3798,59 @@ typedef struct {
  *  SUCCESS
  *  RADIO_NOT_AVAILABLE (radio resetting)
  *  GENERIC_FAILURE
- *  SUBSCRIPTION_NOT_SUPPORTED
  *
  */
-#define RIL_REQUEST_SET_DATA_SUBSCRIPTION  116
+#ifndef RIL_NO_CELL_INFO_LIST
+#define RIL_REQUEST_SET_DATA_SUBSCRIPTION  115
+#else
+#define RIL_REQUEST_SET_DATA_SUBSCRIPTION  119
+#endif
 
+/**
+ * RIL_REQUEST_GET_UICC_SUBSCRIPTION
+ *
+ * Request to query the UICC subscription info
+ * that is currently set.
+ *
+ * "data" is NULL
+ *
+ * "response" is const RIL_SelectUiccSub *
+ *
+ * Valid errors:
+ *  SUCCESS
+ *  RADIO_NOT_AVAILABLE
+ *  GENERIC_FAILURE
+ *
+ */
+#ifndef RIL_NO_CELL_INFO_LIST
+#define RIL_REQUEST_GET_UICC_SUBSCRIPTION 116
+#else
+#define RIL_REQUEST_GET_UICC_SUBSCRIPTION 120
+#endif
+
+/**
+ * RIL_REQUEST_GET_DATA_SUBSCRIPTION
+ *
+ * Request to query the Data subscription info
+ * that is currently set.
+ *
+ * "data" is NULL
+ *
+ * "response" is int *
+ * ((int *)data)[0] is == 0  Indicates data is active on subscription 0
+ * ((int *)data)[0] is == 1  Indicates data is active on subscription 1
+ *
+ * Valid errors:
+ *  SUCCESS
+ *  RADIO_NOT_AVAILABLE
+ *  GENERIC_FAILURE
+ *
+ */
+#ifndef RIL_NO_CELL_INFO_LIST
+#define RIL_REQUEST_GET_DATA_SUBSCRIPTION 117
+#else
+#define RIL_REQUEST_GET_DATA_SUBSCRIPTION 121
+#endif
 /***********************************************************************/
 
 
@@ -4279,6 +4328,7 @@ typedef struct {
  */
 #define RIL_UNSOL_VOICE_RADIO_TECH_CHANGED 1035
 
+#ifndef RIL_NO_CELL_INFO_LIST
 /**
  * RIL_UNSOL_CELL_INFO_LIST
  *
@@ -4290,21 +4340,39 @@ typedef struct {
  * "response" is an array of RIL_CellInfo.
  */
 #define RIL_UNSOL_CELL_INFO_LIST 1036
+#endif
 
 /**
  * RIL_UNSOL_RESPONSE_IMS_NETWORK_STATE_CHANGED
  *
  * Called when IMS registration state has changed
  *
- * To get IMS registration state and IMS SMS format, callee needs to invoke the
- * following request on main thread:
+ * Callee will invoke the following requests on main thread:
  *
  * RIL_REQUEST_IMS_REGISTRATION_STATE
- *
+  *
  * "data" is NULL
  *
  */
+#ifndef RIL_NO_CELL_INFO_LIST
 #define RIL_UNSOL_RESPONSE_IMS_NETWORK_STATE_CHANGED 1037
+#else
+#define RIL_UNSOL_RESPONSE_IMS_NETWORK_STATE_CHANGED 1036
+#endif
+
+/**
+ * RIL_UNSOL_RESPONSE_TETHERED_MODE_STATE_CHANGED
+ *
+ * Called when tethered mode is enabled or disabled
+ *
+ *
+ * "data" is an int 0 - tethered mode off , 1 - tethered mode on
+ */
+#ifndef RIL_NO_CELL_INFO_LIST
+#define RIL_UNSOL_RESPONSE_TETHERED_MODE_STATE_CHANGED 1038
+#else
+#define RIL_UNSOL_RESPONSE_TETHERED_MODE_STATE_CHANGED 1037
+#endif
 
 /**
  * RIL_UNSOL_ON_SS
@@ -4315,7 +4383,7 @@ typedef struct {
  * "data" is const RIL_StkCcUnsolSsResponse *
  *
  */
-#define RIL_UNSOL_ON_SS 1038
+#define RIL_UNSOL_ON_SS 1039
 
 
 /**
@@ -4326,25 +4394,27 @@ typedef struct {
  * "data" is const char * containing ALPHA string from UICC in UTF-8 format.
  *
  */
-#define RIL_UNSOL_STK_CC_ALPHA_NOTIFY 1039
+#define RIL_UNSOL_STK_CC_ALPHA_NOTIFY 1040
 
 /**
  * RIL_UNSOL_UICC_SUBSCRIPTION_STATUS_CHANGED
  *
- * Indicated when there is a change in subscription status.
+ * Called when there is a change in subscription status.
  * This event will be sent in the following scenarios
  *  - subscription readiness at modem, which was selected by telephony layer
  *  - when subscription is deactivated by modem due to UICC card removal
- *  - When network invalidates the subscription i.e. attach reject due to authentication reject
  *
  * "data" is const int *
  * ((const int *)data)[0] == 0 for Subscription Deactivated
  * ((const int *)data)[0] == 1 for Subscription Activated
  *
  */
-#define RIL_UNSOL_UICC_SUBSCRIPTION_STATUS_CHANGED 1040
+#define RIL_UNSOL_UICC_SUBSCRIPTION_STATUS_CHANGED 1041
+
 /***********************************************************************/
 
+/* COMPATIBILITY WITH MAINLINE */
+#define RIL_REQUEST_ENTER_NETWORK_DEPERSONALIZATION RIL_REQUEST_ENTER_DEPERSONALIZATION_CODE
 
 /**
  * RIL_Request Function pointer
@@ -4410,14 +4480,6 @@ typedef struct {
     RIL_Cancel onCancel;
     RIL_GetVersion getVersion;
 } RIL_RadioFunctions;
-
-typedef struct {
-    char *apn;
-    char *protocol;
-    int authtype;
-    char *username;
-    char *password;
-} RIL_InitialAttachApn;
 
 #ifdef RIL_SHLIB
 struct RIL_Env {

@@ -62,18 +62,18 @@ case $LE_POWER_CLASS in
      logi "LE Power Class: To override, Before turning BT ON; setprop qcom.bt.le_dev_pwr_class <1 or 2 or 3>";;
 esac
 
-if [ -z "$BDADDR" ]
+if [$BDADDR == ""]
 then
-  logwrapper /system/bin/hci_qcomm_init -e $PWR_CLASS $LE_PWR_CLASS -vv
+logwrapper /system/bin/hci_qcomm_init -e $PWR_CLASS $LE_PWR_CLASS -vv
 else
-  logwrapper /system/bin/hci_qcomm_init -b $BDADDR -e $PWR_CLASS $LE_PWR_CLASS -vv
+logwrapper /system/bin/hci_qcomm_init --enable-clock-sharing -b $BDADDR -e $PWR_CLASS $LE_PWR_CLASS -vv
 fi
 
 case $? in
   0) logi "Bluetooth QSoC firmware download succeeded, $PWR_CLASS $BDADDR $TRANSPORT";;
-  *) failed "Bluetooth QSoC firmware download failed" $?;
+  *) failed "Bluetooth QSoC firmware download failed" $exit_code_hci_qcomm_init;
      setprop bluetooth.status off;
-     exit $?;;
+     exit $exit_code_hci_qcomm_init;;
 esac
 
 setprop bluetooth.status on
