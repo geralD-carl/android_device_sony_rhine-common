@@ -1,2 +1,4 @@
-# GPU device
-/dev/kgsl-3d0       u:object_r:gpu_device:s0
+# Hardware tunables
+/sys/devices/virtual/timed_output/vibrator/vtg_level   -- u:object_r:sysfs_vibrator:s0
+
+/system/bin/mac-update                 u:object_r:mac-update_exec:s0

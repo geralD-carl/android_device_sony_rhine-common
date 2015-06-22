@@ -19,6 +19,7 @@ import init.device.rc
 import init.sony.usb.rc
 
 on early-init
+    write /sys/block/mmcblk0/queue/scheduler noop
     mount debugfs debugfs /sys/kernel/debug
     chown system system /sys/kernel/debug/kgsl/proc
 
@@ -76,13 +77,8 @@ on init
     setprop persist.sys.wfd.virtual 0
 
 on fs
-    mkdir /mnt/idd 0751 sony_idd sony_idd
-
     mount_all ./fstab.qcom
     setprop ro.crypto.fuse_sdcard true
-
-    chown sony_idd sony_idd /mnt/idd
-    chmod 0751 /mnt/idd
 
     mkdir /lta-label 0555 system system
     wait /dev/block/platform/msm_sdcc.1/by-name/LTALabel
@@ -90,21 +86,11 @@ on fs
     chown system system /lta-label
     chmod 0555 /lta-label
 
-    chmod 0755 /data/etc
-    start tad
-    exec /sbin/wait4tad_static
-    exec /system/bin/taimport
-
-    restorecon -R /data/etc
-
 on early-boot
     # set RLIMIT_MEMLOCK to 64MB
     setrlimit 8 67108864 67108864
 
     write /sys/kernel/boot_adsp/boot 1
-
-    start ta_qmi_service
-    start sct_service
 
     # Run pre_hw_config.sh before entering charge only mode.
     exec /system/bin/sh /system/etc/pre_hw_config.sh
@@ -112,6 +98,13 @@ on early-boot
     exec /system/bin/sh /system/etc/init.qcom.wifi.sh
 
 on boot
+    # bring CPUs online
+    write /sys/module/msm_thermal/core_control/enabled 0
+    write /sys/devices/system/cpu/cpu1/online 1
+    write /sys/devices/system/cpu/cpu2/online 1
+    write /sys/devices/system/cpu/cpu3/online 1
+    write /sys/module/msm_thermal/core_control/enabled 1
+
     write /sys/module/qpnp_power_on/parameters/forcecrash_on 1
     exec /system/bin/btnvtool -O
     chown bluetooth bluetooth /sys/module/bluetooth_power/parameters/power
@@ -141,10 +134,16 @@ on boot
     chmod 2770 /dev/socket/qmux_radio
     mkdir /dev/socket/qmux_audio 0770 media audio
     chmod 2770 /dev/socket/qmux_audio
-    mkdir /dev/socket/qmux_bluetooth 0770 bluetooth net_bt_stack
+    mkdir /dev/socket/qmux_bluetooth 0770 bluetooth bluetooth
     chmod 2770 /dev/socket/qmux_bluetooth
     mkdir /dev/socket/qmux_gps 0770 gps gps
     chmod 2770 /dev/socket/qmux_gps
+
+    # Create PERFD deamon related dirs
+    mkdir /data/misc/perfd 0755 root system
+    chmod 2755 /data/misc/perfd
+    mkdir /data/system/perfd 0770 root system
+    chmod 2770 /data/system/perfd
 
     setprop ro.telephony.call_ring.multiple false
 
@@ -160,6 +159,10 @@ on boot
     chown bluetooth bluetooth /dev/smd7
 
     chmod 0444 /sys/devices/platform/msm_hsusb/gadget/usb_state
+
+    # MDP idle notifier
+    chown system graphics /sys/class/graphics/fb0/idle_time
+    chmod 0664 /sys/class/graphics/fb0/idle_time
 
     # Remove write permissions to video related nodes
     chown system graphics /sys/class/graphics/fb1/hpd
@@ -188,8 +191,29 @@ on boot
     chmod 400 /sys/class/graphics/fb1/msm_fb_fps_level
     chmod 400 /sys/class/graphics/fb2/msm_fb_fps_level
 
+    # Dynamic fps
+    chmod 644 /sys/devices/virtual/graphics/fb0/dynamic_fps
+    chown system graphics /sys/devices/virtual/graphics/fb0/dynamic_fps
+
     # For bridgemgr daemon to inform the USB driver of the correct transport
     chown radio radio /sys/class/android_usb/f_rmnet_smd_sdio/transport
+
+    # For setting tcp delayed ack
+    chown system system /sys/kernel/ipv4/tcp_delack_seg
+    chown system system /sys/kernel/ipv4/tcp_use_userconfig
+
+    # Define TCP delayed ack settings for WiFi & LTE
+    setprop net.tcp.delack.default     1
+    setprop net.tcp.delack.wifi        20
+    setprop net.tcp.delack.lte         8
+    setprop net.tcp.usercfg.default    0
+    setprop net.tcp.usercfg.wifi       1
+    setprop net.tcp.usercfg.lte        1
+
+    # Assign TCP buffer thresholds to be ceiling value of technology maximums
+    # Increased technology maximums should be reflected here.
+    write /proc/sys/net/core/rmem_max  2097152
+    write /proc/sys/net/core/wmem_max  2097152
 
     chmod 660 /dev/rtc0
     chown system system /dev/rtc0
@@ -233,25 +257,24 @@ on boot
     # an ack packet comes out of order
     write /proc/sys/net/netfilter/nf_conntrack_tcp_be_liberal 1
 
-    # NFC local data and nfcee xml storage
-    mkdir /data/nfc 0770 nfc nfc
-    mkdir /data/nfc/param 0770 nfc nfc
-
     # Set the console loglevel to < KERN_INFO
     # Set the default message loglevel to KERN_INFO
     write /proc/sys/kernel/printk "6 6 1 7"
 
-# QCOM Sensors
-    insmod /system/lib/modules/adsprpc.ko
-    mkdir /data/system 0775 system system
-    mkdir /data/system/sensors 0775 system system
-    mkdir /data/misc/sensors 0775 system system
-    write /data/system/sensors/settings 1
-    chmod 664 /data/system/sensors/settings
-    chown system /data/system/sensors/settings
-    start sensors
-
     chown system /sys/devices/virtual/timed_output/vibrator/vtg_level
+
+    # charger
+    chown root system /sys/module/qpnp_charger/parameters/charger_monitor
+    chown root system /sys/class/power_supply/battery/input_current_max
+    chown root system /sys/class/power_supply/battery/input_current_trim
+    chown root system /sys/class/power_supply/battery/voltage_min
+    chmod 0644 /sys/module/qpnp_charger/parameters/charger_monitor
+    chmod 0644 /sys/class/power_supply/battery/input_current_max
+    chmod 0644 /sys/class/power_supply/battery/input_current_trim
+    chmod 0644 /sys/class/power_supply/battery/voltage_min
+
+    chown system system /sys/devices/virtual/graphics/fb0/rgb
+    chmod 0660 /sys/devices/virtual/graphics/fb0/rgb
 
 on post-fs
     exec /system/bin/chargemon
@@ -262,6 +285,11 @@ on post-fs
 
 # msm specific files that need to be created on /data
 on post-fs-data
+    # Used by taimport for MAC addresses
+    mkdir /data/etc 0755 root shell
+    start taimport
+    start mac-update
+
     mkdir /data/media 0770 media_rw media_rw
 
     # Create the directories used by the Wireless subsystem
@@ -274,7 +302,6 @@ on post-fs-data
 
     # Update WIFI MAC address
     mkdir /data/misc/wifi/prima 0775 wifi wifi
-    exec /system/bin/mac-update
 
     mkdir /data/credmgr 0700 system system
     mkdir /data/tombstones 0755 system system
@@ -295,6 +322,18 @@ on post-fs-data
     chmod 0664 /sys/devices/platform/msm_sdcc.2/polling
     chmod 0664 /sys/devices/platform/msm_sdcc.3/polling
     chmod 0664 /sys/devices/platform/msm_sdcc.4/polling
+
+    # NFC local data and nfcee xml storage
+    mkdir /data/nfc 0770 nfc nfc
+    mkdir /data/nfc/param 0770 nfc nfc
+
+    # QCOM Sensors
+    mkdir /data/system 0775 system system
+    mkdir /data/system/sensors 0775 system system
+    mkdir /data/misc/sensors 0775 system system
+    write /data/system/sensors/settings 1
+    chmod 664 /data/system/sensors/settings
+    chown system /data/system/sensors/settings
 
     # Chown polling nodes as needed from UI running on system server
     chown system system /sys/devices/platform/msm_sdcc.1/polling
@@ -336,140 +375,6 @@ on post-fs-data
     mkdir /dev/socket/mpdecision 0770 system system
     chmod 2770 /dev/socket/mpdecision
 
-    # Enable Power modes and set the CPU Freq Sampling rates
-    write /sys/module/lpm_resources/enable_low_power/l2 1
-    write /sys/module/lpm_resources/enable_low_power/pxo 1
-    write /sys/module/lpm_resources/enable_low_power/vdd_dig 1
-    write /sys/module/lpm_resources/enable_low_power/vdd_mem 1
-    write /sys/module/msm_pm/modes/cpu0/retention/idle_enabled 1
-    write /sys/module/msm_pm/modes/cpu1/retention/idle_enabled 1
-    write /sys/module/msm_pm/modes/cpu2/retention/idle_enabled 1
-    write /sys/module/msm_pm/modes/cpu3/retention/idle_enabled 1
-    write /sys/module/msm_pm/modes/cpu0/power_collapse/suspend_enabled 1
-    write /sys/module/msm_pm/modes/cpu1/power_collapse/suspend_enabled 1
-    write /sys/module/msm_pm/modes/cpu2/power_collapse/suspend_enabled 1
-    write /sys/module/msm_pm/modes/cpu3/power_collapse/suspend_enabled 1
-    write /sys/module/msm_pm/modes/cpu0/power_collapse/idle_enabled 1
-    write /sys/module/msm_pm/modes/cpu1/power_collapse/idle_enabled 1
-    write /sys/module/msm_pm/modes/cpu2/power_collapse/idle_enabled 1
-    write /sys/module/msm_pm/modes/cpu3/power_collapse/idle_enabled 1
-    write /sys/module/msm_pm/modes/cpu0/standalone_power_collapse/suspend_enabled 1
-    write /sys/module/msm_pm/modes/cpu1/standalone_power_collapse/suspend_enabled 1
-    write /sys/module/msm_pm/modes/cpu2/standalone_power_collapse/suspend_enabled 1
-    write /sys/module/msm_pm/modes/cpu3/standalone_power_collapse/suspend_enabled 1
-    write /sys/module/msm_pm/modes/cpu0/standalone_power_collapse/idle_enabled 1
-    write /sys/module/msm_pm/modes/cpu1/standalone_power_collapse/idle_enabled 1
-    write /sys/module/msm_pm/modes/cpu2/standalone_power_collapse/idle_enabled 1
-    write /sys/module/msm_pm/modes/cpu3/standalone_power_collapse/idle_enabled 1
-    write /sys/module/msm_thermal/core_control/enabled 0
-    write /sys/devices/system/cpu/cpu1/online 1
-    write /sys/devices/system/cpu/cpu2/online 1
-    write /sys/devices/system/cpu/cpu3/online 1
-
-    # ondemand
-    #write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "ondemand"
-    #write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor "ondemand"
-    #write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor "ondemand"
-    #write /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor "ondemand"
-    #write /sys/devices/system/cpu/cpufreq/ondemand/sampling_rate 50000
-    #write /sys/devices/system/cpu/cpufreq/ondemand/up_threshold 90
-    #write /sys/devices/system/cpu/cpufreq/ondemand/io_is_busy 1
-    #write /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor 4
-    #write /sys/devices/system/cpu/cpufreq/ondemand/down_differential 10
-    #write /sys/devices/system/cpu/cpufreq/ondemand/up_threshold_multi_core 70
-    #write /sys/devices/system/cpu/cpufreq/ondemand/down_differential_multi_core 3
-    #write /sys/devices/system/cpu/cpufreq/ondemand/optimal_freq 918000
-    #write /sys/devices/system/cpu/cpufreq/ondemand/sync_freq 1026000
-    #write /sys/devices/system/cpu/cpufreq/ondemand/up_threshold_any_cpu_load 80
-    #chown system /sys/devices/system/cpu/cpufreq/ondemand/sampling_rate
-    #chown system /sys/devices/system/cpu/cpufreq/ondemand/sampling_down_factor
-    #chown system /sys/devices/system/cpu/cpufreq/ondemand/io_is_busy
-
-    # interactive
-    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "interactive"
-    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor "interactive"
-    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor "interactive"
-    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor "interactive"
-    write /sys/devices/system/cpu/cpufreq/interactive/io_is_busy 1
-    write /sys/devices/system/cpu/cpufreq/interactive/above_hispeed_delay "20000 1400000:40000 1700000:20000"
-    write /sys/devices/system/cpu/cpufreq/interactive/go_hispeed_load 90
-    write /sys/devices/system/cpu/cpufreq/interactive/hispeed_freq 1190400
-    write /sys/devices/system/cpu/cpufreq/interactive/target_loads "85 1500000:90 1800000:70"
-    write /sys/devices/system/cpu/cpufreq/interactive/min_sample_time 40000
-    write /sys/devices/system/cpu/cpufreq/interactive/sampling_down_factor 100000
-
-    write /sys/module/cpu_boost/parameters/boost_ms 20
-    write /sys/module/cpu_boost/parameters/sync_threshold 1728000
-    write /sys/module/cpu_boost/parameters/input_boost_freq 1497600
-    write /sys/module/cpu_boost/parameters/input_boost_ms 40
-
-    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq 300000
-    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_min_freq 300000
-    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_min_freq 300000
-    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_min_freq 300000
-    chown system /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
-    chown system /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
-    write /sys/module/msm_thermal/core_control/enabled 1
-    chown root system /sys/devices/system/cpu/mfreq
-    chmod 220 /sys/devices/system/cpu/mfreq
-    chown root system /sys/devices/system/cpu/cpu1/online
-    chown root system /sys/devices/system/cpu/cpu2/online
-    chown root system /sys/devices/system/cpu/cpu3/online
-    chmod 664 /sys/devices/system/cpu/cpu1/online
-    chmod 664 /sys/devices/system/cpu/cpu2/online
-    chmod 664 /sys/devices/system/cpu/cpu3/online
-    write /dev/cpuctl/apps/cpu.notify_on_migrate 1
-    # set DCVS parameters for CPU
-    write /sys/module/msm_dcvs/cores/cpu0/slack_time_max_us 40000
-    write /sys/module/msm_dcvs/cores/cpu0/slack_time_min_us 40000
-    write /sys/module/msm_dcvs/cores/cpu0/em_win_size_min_us 100000
-    write /sys/module/msm_dcvs/cores/cpu0/em_win_size_max_us 500000
-    write /sys/module/msm_dcvs/cores/cpu0/slack_mode_dynamic 0
-    write /sys/module/msm_dcvs/cores/cpu0/disable_pc_threshold 1000000
-    write /sys/module/msm_dcvs/cores/cpu1/slack_time_max_us 25000
-    write /sys/module/msm_dcvs/cores/cpu1/slack_time_min_us 25000
-    write /sys/module/msm_dcvs/cores/cpu1/em_win_size_min_us 100000
-    write /sys/module/msm_dcvs/cores/cpu1/em_win_size_max_us 500000
-    write /sys/module/msm_dcvs/cores/cpu1/slack_mode_dynamic 0
-    write /sys/module/msm_dcvs/cores/cpu1/disable_pc_threshold 1000000
-    write /sys/module/msm_dcvs/cores/cpu2/slack_time_max_us 25000
-    write /sys/module/msm_dcvs/cores/cpu2/slack_time_min_us 25000
-    write /sys/module/msm_dcvs/cores/cpu2/em_win_size_min_us 100000
-    write /sys/module/msm_dcvs/cores/cpu2/em_win_size_max_us 500000
-    write /sys/module/msm_dcvs/cores/cpu2/slack_mode_dynamic 0
-    write /sys/module/msm_dcvs/cores/cpu2/disable_pc_threshold 1000000
-    write /sys/module/msm_dcvs/cores/cpu3/slack_time_max_us 25000
-    write /sys/module/msm_dcvs/cores/cpu3/slack_time_min_us 25000
-    write /sys/module/msm_dcvs/cores/cpu3/em_win_size_min_us 100000
-    write /sys/module/msm_dcvs/cores/cpu3/em_win_size_max_us 500000
-    write /sys/module/msm_dcvs/cores/cpu3/slack_mode_dynamic 0
-    write /sys/module/msm_dcvs/cores/cpu3/disable_pc_threshold 1000000
-    # set DCVS parameters for GPU
-    write /sys/module/msm_dcvs/cores/gpu0/slack_time_max_us 20000
-    write /sys/module/msm_dcvs/cores/gpu0/slack_time_min_us 20000
-    write /sys/module/msm_dcvs/cores/gpu0/slack_mode_dynamic 0
-    # set msm_mpdecision parameters
-    write /sys/module/msm_mpdecision/slack_time_max_us 45000
-    write /sys/module/msm_mpdecision/slack_time_min_us 15000
-    write /sys/module/msm_mpdecision/em_win_size_min_us 100000
-    write /sys/module/msm_mpdecision/em_win_size_max_us 1000000
-    write /sys/module/msm_mpdecision/online_util_pct_min 3
-    write /sys/module/msm_mpdecision/online_util_pct_max 25
-    write /sys/module/msm_mpdecision/em_max_util_pct 97
-    write /sys/module/msm_mpdecision/rq_avg_poll_ms 2
-    write /sys/module/msm_mpdecision/mp_em_rounding_point_min 10
-    write /sys/module/msm_mpdecision/mp_em_rounding_point_max 85
-    write /sys/module/msm_mpdecision/iowait_threshold_pct 50
-    # set permissions for the nodes needed by display on/off hook
-    chown system /sys/module/msm_dcvs/cores/cpu0/slack_time_max_us
-    chown system /sys/module/msm_dcvs/cores/cpu0/slack_time_min_us
-    chown system /sys/module/msm_mpdecision/slack_time_max_us
-    chown system /sys/module/msm_mpdecision/slack_time_min_us
-    chmod 664 /sys/module/msm_dcvs/cores/cpu0/slack_time_max_us
-    chmod 664 /sys/module/msm_dcvs/cores/cpu0/slack_time_min_us
-    chmod 664 /sys/module/msm_mpdecision/slack_time_max_us
-    chmod 664 /sys/module/msm_mpdecision/slack_time_min_us
-
     # SONY: Camera
     mkdir /data/camera 0770 media camera
     chown media camera /sys/devices/sony_camera_0/info
@@ -479,10 +384,7 @@ on post-fs-data
 
 on charger
     # Enable Power modes and set the CPU Freq Sampling rates
-    write /sys/module/lpm_resources/enable_low_power/l2 1
-    write /sys/module/lpm_resources/enable_low_power/pxo 1
-    write /sys/module/lpm_resources/enable_low_power/vdd_dig 1
-    write /sys/module/lpm_resources/enable_low_power/vdd_mem 1
+    write /sys/module/lpm_levels/enable_low_power/l2 4
     write /sys/module/msm_pm/modes/cpu0/retention/idle_enabled 1
     write /sys/module/msm_pm/modes/cpu0/power_collapse/suspend_enabled 1
     write /sys/module/msm_pm/modes/cpu1/power_collapse/suspend_enabled 1
@@ -508,20 +410,66 @@ on charger
     write /sys/devices/system/cpu/cpu1/online 0
     write /sys/devices/system/cpu/cpu2/online 0
     write /sys/devices/system/cpu/cpu3/online 0
+    start mpdecision
+
+on property:init.svc.bootanim=running
+    # Clear Sony boot splash
+    write /sys/class/graphics/fb0/blank 1
+    write /sys/class/graphics/fb0/blank 0
+
+on property:service.bootanim.exit=1
+    # Enable Power modes and set the CPU Freq Sampling rates
+    write /sys/module/lpm_levels/enable_low_power/l2 4
+    write /sys/module/msm_pm/modes/cpu0/power_collapse/suspend_enabled 1
+    write /sys/module/msm_pm/modes/cpu1/power_collapse/suspend_enabled 1
+    write /sys/module/msm_pm/modes/cpu2/power_collapse/suspend_enabled 1
+    write /sys/module/msm_pm/modes/cpu3/power_collapse/suspend_enabled 1
+    write /sys/module/msm_pm/modes/cpu0/power_collapse/idle_enabled 1
+    write /sys/module/msm_pm/modes/cpu1/power_collapse/idle_enabled 1
+    write /sys/module/msm_pm/modes/cpu2/power_collapse/idle_enabled 1
+    write /sys/module/msm_pm/modes/cpu3/power_collapse/idle_enabled 1
+    write /sys/module/msm_pm/modes/cpu0/standalone_power_collapse/suspend_enabled 1
+    write /sys/module/msm_pm/modes/cpu1/standalone_power_collapse/suspend_enabled 1
+    write /sys/module/msm_pm/modes/cpu2/standalone_power_collapse/suspend_enabled 1
+    write /sys/module/msm_pm/modes/cpu3/standalone_power_collapse/suspend_enabled 1
+    write /sys/module/msm_pm/modes/cpu0/standalone_power_collapse/idle_enabled 1
+    write /sys/module/msm_pm/modes/cpu1/standalone_power_collapse/idle_enabled 1
+    write /sys/module/msm_pm/modes/cpu2/standalone_power_collapse/idle_enabled 1
+    write /sys/module/msm_pm/modes/cpu3/standalone_power_collapse/idle_enabled 1
+    write /sys/module/msm_pm/modes/cpu0/retention/idle_enabled 1
+    write /sys/module/msm_pm/modes/cpu1/retention/idle_enabled 1
+    write /sys/module/msm_pm/modes/cpu2/retention/idle_enabled 1
+    write /sys/module/msm_pm/modes/cpu3/retention/idle_enabled 1
+
+    # Set the CPU Freq Sampling rates
+    setprop sys.perf.profile 1
+
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq 300000
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_min_freq 300000
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_min_freq 300000
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_min_freq 300000
+    chown system /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq
+    chown system /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq
+    chown root system /sys/devices/system/cpu/mfreq
+    chmod 220 /sys/devices/system/cpu/mfreq
+    chown root system /sys/devices/system/cpu/cpu1/online
+    chown root system /sys/devices/system/cpu/cpu2/online
+    chown root system /sys/devices/system/cpu/cpu3/online
+    chmod 664 /sys/devices/system/cpu/cpu1/online
+    chmod 664 /sys/devices/system/cpu/cpu2/online
+    chmod 664 /sys/devices/system/cpu/cpu3/online
+    write /dev/cpuctl/apps/cpu.notify_on_migrate 1
+
+    # Switch to ROW after boot for better UX
+    write /sys/block/mmcblk0/queue/scheduler row
 
 on property:init.svc.wpa_supplicant=stopped
     stop dhcpcd
 
-# Update WIFI MAC address
-service mac-update /system/bin/mac-update
-    class main
-    user wifi
-    oneshot
-
 service hciattach /system/bin/sh /system/etc/init.qcom.bt.sh
     class late_start
     user bluetooth
-    group qcom_oncrpc bluetooth net_bt_admin system net_bt_stack
+    group qcom_oncrpc bluetooth net_bt_admin system
     disabled
     oneshot
 
@@ -535,20 +483,28 @@ on property:bluetooth.hciattach=false
 service qmuxd /system/bin/qmuxd
     class main
     user radio
-    group radio audio bluetooth gps qcom_diag net_bt_stack
+    group radio audio bluetooth gps qcom_diag
 
 # SONY: TrimArea Daemon
 # Last 2 args: start block(blk size 128k), number of blocks(partitionsize(kb)/128(kb))
-service tad /sbin/tad_static /dev/block/mmcblk0 1,16
-    class core
+service tad_static /system/bin/tad_static /dev/block/mmcblk0 1,16
     user root
     group root
     socket tad stream 0660 system system
-    disabled
+    class core
 
-service updatemiscta /system/bin/updatemiscta
+service taimport /system/bin/taimport
     class main
     user root
+    group system
+    disabled
+    oneshot
+
+# Update Wi-Fi MAC address
+service mac-update /system/bin/mac-update
+    class main
+    user wifi
+    disabled
     oneshot
 
 service netmgrd /system/bin/netmgrd
@@ -560,20 +516,7 @@ service gsiff_daemon /system/bin/gsiff_daemon
     user gps
     group gps net_raw misc
 
-service qrngd /system/bin/qrngd -f
-    class main
-    user root
-    group root
-
-service qrngp /system/bin/qrngp
-    class main
-    user root
-    group root
-    oneshot
-    disabled
-
 on property:sys.boot_completed=1
-    start qrngp
     write /sys/block/mmcblk0/bdi/read_ahead_kb 512
 
 service qseecomd /system/bin/qseecomd
@@ -589,7 +532,6 @@ service hw_config /system/bin/sh /system/etc/hw_config.sh
 service wpa_supplicant /system/bin/wpa_supplicant \
     -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf \
     -I/system/etc/wifi/wpa_supplicant_overlay.conf \
-    -O/data/misc/wifi/sockets \
     -e/data/misc/wifi/entropy.bin -g@android:wpa_wlan0
     #   we will start as root and wpa_supplicant will switch to user wifi
     #   after setting up the capabilities required for WEXT
@@ -605,7 +547,7 @@ service p2p_supplicant /system/bin/wpa_supplicant \
     -I/system/etc/wifi/p2p_supplicant_overlay.conf -N \
     -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf \
     -I/system/etc/wifi/wpa_supplicant_overlay.conf \
-    -O/data/misc/wifi/sockets -puse_p2p_group_interface=1 \
+    -puse_p2p_group_interface=1 \
     -e/data/misc/wifi/entropy.bin -g@android:wpa_wlan0
 #   we will start as root and wpa_supplicant will switch to user wifi
 #   after setting up the capabilities required for WEXT
@@ -652,17 +594,18 @@ on property:ro.data.large_tcp_window_size=true
 service sdcard /system/bin/sdcard -u 1023 -g 1023 -l /data/media /mnt/shell/emulated
     class late_start
 
-service fuse_sdcard1 /system/bin/sdcard -u 1023 -g 1023 -d /mnt/media_rw/sdcard1 /storage/sdcard1
+service fuse_sdcard1 /system/bin/sdcard -u 1023 -g 1023 -w 1023 /mnt/media_rw/sdcard1 /storage/sdcard1
     class late_start
     disabled
 
-service fuse_usbdisk /system/bin/sdcard -u 1023 -g 1023 -d /mnt/media_rw/usbdisk /storage/usbdisk
+service fuse_usbdisk /system/bin/sdcard -u 1023 -g 1023 -w 1023 /mnt/media_rw/usbdisk /storage/usbdisk
     class late_start
     disabled
 
 service mpdecision /system/bin/mpdecision --avg_comp
     class main
     user root
+    disabled
 
 # Start suntrold
 service suntrold /system/bin/suntrold
@@ -680,16 +623,10 @@ service bugreport /system/bin/dumpstate -d -p -B \
     keycodes 114 115 116
 
 service fm_dl /system/bin/sh /system/etc/init.qcom.fm.sh
-    class late_start
     user root
-    group system qcom_oncrpc
+    group system
     disabled
     oneshot
-
-service illumination /system/bin/illumination_service
-    socket illumination stream 0660 system camera
-    class main
-    user root
 
 service scd /system/bin/scd
     class main
@@ -699,18 +636,18 @@ service scd /system/bin/scd
 # Secure Config Transfer service
 service sct_service /system/bin/sct_service
     user root
-    disabled
+    class main
 
 # Trim Area QMI service
 service ta_qmi_service /system/bin/ta_qmi_service
     user root
-    disabled
+    class main
 
-# Start system_monitor
-service system_monitor /system/bin/system_monitor
-    socket sysmon stream 0660 root system
-    class core
+# Thermal Manager service
+service thermanager /system/bin/thermanager /system/etc/thermanager.xml
+    class main
     user root
+    group root
 
 service rmt_storage /system/bin/rmt_storage
     class core
@@ -721,13 +658,6 @@ service irsc_util /system/bin/irsc_util "/etc/sec_config"
     user root
     oneshot
 
-service ppd /system/bin/mm-pp-daemon
-    class late_start
-    user system
-    socket pps stream 0660 system system
-    group system graphics qcom_diag
-    disabled
-
 service qcamerasvr /system/bin/mm-qcamera-daemon
     class late_start
     user camera
@@ -736,8 +666,7 @@ service qcamerasvr /system/bin/mm-qcamera-daemon
 service sensors /system/bin/sensors.qcom
     class main
     user root
-    group root
-    disabled
+    group sensors radio system
 
 service wcnss-service /system/bin/wcnss_service
     class late_start
@@ -757,29 +686,59 @@ service ptt_socket_app /system/bin/ptt_socket_app
     group system
     oneshot
 
-on property:init.svc.surfaceflinger=running
-    start ppd
+# create filesystem if necessary
+service setup_fs /system/bin/setup_fs /dev/block/platform/msm_sdcc.1/by-name/userdata
+    class core
+    user root
+    group root
+    oneshot
 
-on property:init.svc.surfaceflinger=stopped
-    stop ppd
+service charger /sbin/healthd -c
+    class charger
+    seclabel u:r:healthd:s0
 
 # Powersave
 on property:sys.perf.profile=0
+    stop mpdecision
+    write /sys/module/msm_thermal/core_control/enabled 0
+    write /sys/devices/system/cpu/cpu0/online 1
+    write /sys/devices/system/cpu/cpu1/online 1
+    write /sys/devices/system/cpu/cpu2/online 1
+    write /sys/devices/system/cpu/cpu3/online 1
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "conservative"
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor "conservative"
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor "conservative"
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor "conservative"
+    write /sys/class/kgsl/kgsl-3d0/devfreq/governor "msm-adreno-tz"
+    write /sys/module/msm_thermal/core_control/enabled 1
     start mpdecision
-    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor conservative
-    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor conservative
-    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor conservative
-    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor conservative
-    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor ondemand
 
 # Balanced
 on property:sys.perf.profile=1
+    stop mpdecision
+    write /sys/module/msm_thermal/core_control/enabled 0
+    write /sys/devices/system/cpu/cpu0/online 1
+    write /sys/devices/system/cpu/cpu1/online 1
+    write /sys/devices/system/cpu/cpu2/online 1
+    write /sys/devices/system/cpu/cpu3/online 1
+    write /sys/devices/system/cpu/cpufreq/interactive/above_hispeed_delay "20000 1400000:40000 1700000:20000"
+    write /sys/devices/system/cpu/cpufreq/interactive/go_hispeed_load 90
+    write /sys/devices/system/cpu/cpufreq/interactive/hispeed_freq 1497600
+    write /sys/devices/system/cpu/cpufreq/interactive/io_is_busy 1
+    write /sys/devices/system/cpu/cpufreq/interactive/target_loads "85 1500000:90 1800000:70"
+    write /sys/devices/system/cpu/cpufreq/interactive/min_sample_time 40000
+    write /sys/devices/system/cpu/cpufreq/interactive/sampling_down_factor 100000
+    write /sys/module/cpu_boost/parameters/boost_ms 20
+    write /sys/module/cpu_boost/parameters/sync_threshold 1728000
+    write /sys/module/cpu_boost/parameters/input_boost_freq 1497600
+    write /sys/module/cpu_boost/parameters/input_boost_ms 40
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "interactive"
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor "interactive"
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor "interactive"
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor "interactive"
+    write /sys/class/kgsl/kgsl-3d0/devfreq/governor "msm-adreno-tz"
+    write /sys/module/msm_thermal/core_control/enabled 1
     start mpdecision
-    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor interactive
-    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor interactive
-    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor interactive
-    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor interactive
-    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor ondemand
 
 # High performance
 on property:sys.perf.profile=2
@@ -788,8 +747,8 @@ on property:sys.perf.profile=2
     write /sys/devices/system/cpu/cpu1/online 1
     write /sys/devices/system/cpu/cpu2/online 1
     write /sys/devices/system/cpu/cpu3/online 1
-    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor performance
-    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor performance
-    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor performance
-    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor performance
-    write /sys/class/kgsl/kgsl-3d0/pwrscale/trustzone/governor performance
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor "performance"
+    write /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor "performance"
+    write /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor "performance"
+    write /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor "performance"
+    write /sys/class/kgsl/kgsl-3d0/devfreq/governor "performance"
